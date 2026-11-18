@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 
@@ -9,16 +10,19 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 media/
+static_serve/static_root/
+static_serve/media_root/
 
 # Static files collected by collectstatic
 static_serve/
 
 # Environment files
 .env
-.venv
+.venv/
 env/
 venv/
 ENV/
+cookies.txt
 
 # IDE
 .vscode/

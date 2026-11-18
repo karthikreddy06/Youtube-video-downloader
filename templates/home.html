@@ -2,116 +2,122 @@
 {% load crispy_forms_tags %}
 
 {% block content %}
-
     <div class="background">
         <div class="title">
-            <p>YTV Downloader</p>
+            <p>Multi-platform Video Downloader</p>
         </div>
 
         <div class="content">
-            <form action="" method="post">
+            <form action="{% url 'home' %}" method="post">
                 {% csrf_token %}
                 {{ form|crispy }}
-                <input type="submit" value="Download" class="btn btn-info btn-block">
+                <input type="submit" value="Get download options" class="btn btn-info btn-block">
             </form>
         </div>
     </div>
 
+    {% if error %}
+        <p class="download-error" role="alert">{{ error }}</p>
+    {% endif %}
+
     {% if title %}
         <div class="dbox">
-            <div class="img-thumb">
-                <img class="img-responsive" src="{{ thumb }}">
-            </div>
+            {% if thumb %}
+                <div class="img-thumb">
+                    <img class="img-responsive" src="{{ thumb }}" alt="Thumbnail for {{ title }}">
+                </div>
+            {% endif %}
             <div id="desl" class="v-about">
+                <p><strong>{{ platform }}</strong></p>
                 <p class="v-title">{{ title }}</p>
                 <section class="infos">
-
-                    <li>Duration <b>{{ duration }}</b></li>
-                    <li>Views <b>{{ views }}</b></li>
-                    <li>Likes <b>{{ likes }}</b></li>
-                    <li>Dislikes <b>{{ dislikes }}</b</li>
-
+                    {% if duration %}<li>Duration <b>{{ duration }} min</b></li>{% endif %}
+                    {% if views %}<li>Views <b>{{ views }}</b></li>{% endif %}
+                    {% if likes %}<li>Likes <b>{{ likes }}</b></li>{% endif %}
                 </section>
             </div>
         </div>
 
         <div id="m-show">
+            <p><strong>{{ platform }}</strong></p>
             <p class="v-title">{{ title }}</p>
         </div>
+
         <div class="downloads">
-
             <table>
+                <thead>
                 <tr>
-                    <th scope="col">Resolution</th>
-                    <th scope="col">File Size</th>
-                    <th scope="col">Extension</th>
-                    <th scope="col">Download</th>
-                </tr>
-                <tr>
-                    {% for stream in streams %}
-                        <tr>
-                            <td>{{ stream.resolution }}</td>
-                            <td>{{ stream.file_size }}</td>
-                            <td>{{ stream.extension }}</td>
-                            <td><a href="{{ stream.video_url }}" style="text-decoration: none;"
-                                   download="{{ title }}.{{ extension }}" target="_blank">Download <i
-                                    class=" fa fa-download"></i></a></td>
-                        </tr>
-                    {% endfor %}
-                </tr>
-            </table>
-
-            <p class="h3 text-center mt-5 mb-5">Audio Only</p>
-            <table class="table mt-5 mb-5">
-                <thead class="thead-light">
-                <tr>
-                    <th scope="col">File Size</th>
-                    <th scope="col">Extension</th>
+                    <th scope="col">Quality</th>
+                    <th scope="col">Approx. file size</th>
                     <th scope="col">Download</th>
                 </tr>
                 </thead>
                 <tbody>
-                {% for stream in stream_audio %}
+                {% for option in options %}
                     <tr>
-                        <td>{{ stream.file_size }}</td>
-                        <td>{{ stream.extension }}</td>
-                        <td><a href="{{ stream.video_url }}" style="text-decoration: none;"
-                               download="{{ title }}.{{ extension }}" target="_blank">Download <i
-                                class=" fa fa-download"></i></a></td>
+                        <td>{{ option.label }}</td>
+                        <td>{{ option.file_size }}</td>
+                        <td>
+                            <form class="download-form" action="{% url 'download_file' %}" method="post">
+                                {% csrf_token %}
+                                <input type="hidden" name="url" value="{{ source_url }}">
+                                <input type="hidden" name="option" value="{{ option.value }}">
+                                <button type="submit" class="download-button">Download <i class="fa fa-download" aria-hidden="true"></i></button>
+                            </form>
+                        </td>
                     </tr>
+                {% empty %}
+                    <tr><td colspan="3">No downloadable video formats were found.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>
-
-            {##}
-            {#            <p class="h3 text-center mt-5 mb-5">Video Only</p>#}
-            {#            <table class="table mt-5">#}
-            {#                <thead class="thead-light">#}
-            {#                <tr>#}
-            {#                    <th scope="col">Resolution</th>#}
-            {#                    <th scope="col">File Size</th>#}
-            {#                    <th scope="col">Extension</th>#}
-            {#                    <th scope="col" >Download</th>#}
-            {#                </tr>#}
-            {#                </thead>#}
-            {#                <tbody>#}
-            {#                {% for stream in stream_video %}#}
-            {#                    <tr>#}
-            {#                        <td>{{ stream.resolution }}</td>#}
-            {#                        <td>{{ stream.file_size }}</td>#}
-            {#                        <td>{{ stream.extension }}</td>#}
-            {#                        <td><a href="{{ stream.video_url }}" style="text-decoration: none;"#}
-            {#                               download="{{ title }}.{{ extension }}" target="_blank">Download <i#}
-            {#                                class=" fa fa-download"></i></a></td>#}
-            {#                    </tr>#}
-            {#                {% endfor %}#}
-            {#                </tbody>#}
-            {#            </table>#}
-            {##}
         </div>
-
-
     {% endif %}
 
+    <style>
+        .download-error {
+            margin: 20px auto;
+            max-width: 900px;
+            color: #a00000;
+            text-align: center;
+            font-weight: bold;
+        }
 
+        .download-button {
+            border: 0;
+            background: transparent;
+            color: #960FF2;
+            cursor: pointer;
+            font: inherit;
+        }
+
+        .download-button:disabled {
+            cursor: wait;
+            opacity: .7;
+        }
+
+        .download-spinner {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            margin-right: 6px;
+            border: 2px solid currentColor;
+            border-right-color: transparent;
+            border-radius: 50%;
+            animation: download-spin .7s linear infinite;
+        }
+
+        @keyframes download-spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+    <script>
+        document.querySelectorAll('.download-form').forEach(function (form) {
+            form.addEventListener('submit', function () {
+                var button = form.querySelector('button[type="submit"]');
+                button.disabled = true;
+                button.innerHTML = '<span class="download-spinner" aria-hidden="true"></span>Downloading...';
+            });
+        });
+    </script>
 {% endblock %}

@@ -18,5 +18,6 @@ from django.urls import path
 from ytdl import views
 
 urlpatterns = [
-    path('', views.download_video),
+    path('', views.download_video, name='home'),
+    path('download/', views.download_file, name='download_file'),
 ]
