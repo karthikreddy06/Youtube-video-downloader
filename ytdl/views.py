@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 import os
 import re
@@ -15,7 +16,13 @@ from django.views.decorators.http import require_POST, require_http_methods
 from .forms import DownloadForm
 
 
+logger = logging.getLogger(__name__)
 DOWNLOAD_LOCK = threading.Lock()
+YTDL_ERRORS = (
+    yt_dlp.utils.DownloadError,
+    yt_dlp.utils.UnsupportedError,
+    yt_dlp.utils.PostProcessingError,
+)
 
 
 def _ydl_options():
@@ -89,12 +96,57 @@ def _format_options(info):
 
 def _friendly_download_error(error):
     message = str(error).lower()
+    if any(term in message for term in ('429', 'rate-limit', 'rate limit', 'too many requests')):
+        return 'The service is receiving too many requests. Please wait and try again.'
     if any(term in message for term in (
-        'login', 'private', 'rate limit', 'rate-limit', 'too many requests',
-        'http error 429', 'sign in', 'authentication',
+        'login', 'private', 'sign in', 'authentication', 'please log in',
     )):
         return 'This content needs a logged-in session or is private.'
+    if any(term in message for term in (
+        'requested format is not available',
+        'requested format not available',
+        'no video formats found',
+        'format is not available',
+        'format not available',
+    )):
+        return 'The requested format is not available. Please choose another quality.'
+    if 'ffmpeg' in message and any(term in message for term in (
+        'not found', 'not installed', 'no such file', 'required', 'executable',
+    )):
+        return 'FFmpeg is missing or unavailable. Install FFmpeg and ensure it is on PATH.'
     return 'Could not process this link. Check that it is public and try again.'
+
+
+def _is_format_unavailable(error):
+    message = str(error).lower()
+    return any(term in message for term in (
+        'requested format is not available',
+        'requested format not available',
+        'no video formats found',
+        'format is not available',
+        'format not available',
+    ))
+
+
+def _download_video_with_fallback(url, options, height):
+    selectors = [
+        'bestvideo[height<={}]+bestaudio/best[height<={}]'.format(height, height),
+        'bestvideo+bestaudio/best',
+        'best',
+    ]
+    for index, selector in enumerate(selectors):
+        try:
+            with yt_dlp.YoutubeDL(dict(options, format=selector)) as ydl:
+                return ydl.extract_info(url, download=True)
+        except yt_dlp.utils.DownloadError as error:
+            if index == len(selectors) - 1 or not _is_format_unavailable(error):
+                raise
+            logger.warning(
+                'yt-dlp format selector %r failed; trying the next selector: %s',
+                selector,
+                error,
+                exc_info=True,
+            )
 
 
 def _safe_filename(title):
@@ -119,7 +171,8 @@ def download_video(request):
     try:
         with yt_dlp.YoutubeDL(_ydl_options()) as ydl:
             info = ydl.extract_info(video_url, download=False)
-    except (yt_dlp.utils.DownloadError, yt_dlp.utils.UnsupportedError) as error:
+    except YTDL_ERRORS as error:
+        logger.exception('yt-dlp metadata extraction failed: %s', error)
         context['error'] = _friendly_download_error(error)
         return render(request, 'home.html', context, status=400)
 
@@ -181,13 +234,11 @@ def download_file(request):
             })
         else:
             height = int(option)
-            options.update({
-                'format': 'bestvideo[height<={}]+bestaudio/best[height<={}]'.format(height, height),
-                'merge_output_format': 'mp4',
-            })
-
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(form.cleaned_data['url'], download=True)
+            options['merge_output_format'] = 'mp4'
+            info = _download_video_with_fallback(form.cleaned_data['url'], options, height)
+        if option == 'mp3':
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(form.cleaned_data['url'], download=True)
 
         files = [
             path for path in temp_dir.iterdir()
@@ -208,7 +259,8 @@ def download_file(request):
         )
         response._resource_closers.append(lambda: shutil.rmtree(temp_dir))
         return response
-    except (yt_dlp.utils.DownloadError, yt_dlp.utils.UnsupportedError) as error:
+    except YTDL_ERRORS as error:
+        logger.exception('yt-dlp download failed: %s', error)
         return render(request, 'home.html', {
             'form': DownloadForm(initial={'url': form.cleaned_data['url']}),
             'error': _friendly_download_error(error),

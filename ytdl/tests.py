@@ -7,7 +7,13 @@ from django.test import RequestFactory, TestCase
 import yt_dlp
 
 from .forms import DownloadForm
-from .views import _format_options, _ydl_options, download_file, download_video
+from .views import (
+    _format_options,
+    _friendly_download_error,
+    _ydl_options,
+    download_file,
+    download_video,
+)
 
 
 class DownloadFormTests(TestCase):
@@ -61,6 +67,37 @@ class FormatOptionTests(TestCase):
 
 
 class DownloadViewTests(TestCase):
+    def test_download_errors_have_specific_friendly_messages(self):
+        cases = [
+            (
+                yt_dlp.utils.DownloadError('Login required: this video is private'),
+                'This content needs a logged-in session or is private.',
+            ),
+            (
+                yt_dlp.utils.DownloadError('HTTP Error 429: too many requests'),
+                'The service is receiving too many requests. Please wait and try again.',
+            ),
+            (
+                yt_dlp.utils.DownloadError('Too many requests; try again later'),
+                'The service is receiving too many requests. Please wait and try again.',
+            ),
+            (
+                yt_dlp.utils.DownloadError('Requested format is not available'),
+                'The requested format is not available. Please choose another quality.',
+            ),
+            (
+                yt_dlp.utils.PostProcessingError('ffmpeg executable not found'),
+                'FFmpeg is missing or unavailable. Install FFmpeg and ensure it is on PATH.',
+            ),
+            (
+                yt_dlp.utils.DownloadError('Unexpected extractor failure'),
+                'Could not process this link. Check that it is public and try again.',
+            ),
+        ]
+        for error, expected in cases:
+            with self.subTest(error=str(error)):
+                self.assertEqual(_friendly_download_error(error), expected)
+
     def test_info_page_shows_platform_and_options(self):
         with patch('ytdl.views.yt_dlp.YoutubeDL') as youtube_dl:
             youtube_dl.return_value.__enter__.return_value.extract_info.return_value = {
@@ -121,6 +158,63 @@ class DownloadViewTests(TestCase):
         self.assertEqual(b''.join(response.streaming_content), b'video with audio')
         response.close()
         self.assertFalse(created['directory'].exists())
+
+    def test_video_download_retries_format_selectors(self):
+        attempted = []
+        created = {}
+
+        class FakeYoutubeDL:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def extract_info(self, url, download=False):
+                attempted.append(self.options['format'])
+                if len(attempted) < 3:
+                    raise yt_dlp.utils.DownloadError('Requested format is not available')
+                path = Path(self.options['outtmpl'].replace('%(ext)s', 'mp4'))
+                path.write_bytes(b'fallback video with audio')
+                created['directory'] = path.parent
+                return {'title': 'Fallback video'}
+
+        with patch('ytdl.views.yt_dlp.YoutubeDL', FakeYoutubeDL):
+            with self.assertLogs('ytdl.views', level='WARNING') as logs:
+                response = self.client.post('/download/', {
+                    'url': 'https://www.instagram.com/reel/example/',
+                    'option': '720',
+                })
+
+        self.assertEqual(attempted, [
+            'bestvideo[height<=720]+bestaudio/best[height<=720]',
+            'bestvideo+bestaudio/best',
+            'best',
+        ])
+        self.assertTrue(any('Requested format is not available' in record for record in logs.output))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), b'fallback video with audio')
+        response.close()
+        self.assertFalse(created['directory'].exists())
+
+    def test_failed_download_logs_exception_with_traceback(self):
+        error = yt_dlp.utils.DownloadError('HTTP Error 429: rate-limit exceeded')
+        request = RequestFactory().post('/download/', {
+            'url': 'https://www.instagram.com/reel/example/',
+            'option': '720',
+        })
+        with patch('ytdl.views.yt_dlp.YoutubeDL') as youtube_dl:
+            youtube_dl.return_value.__enter__.return_value.extract_info.side_effect = error
+            with self.assertLogs('ytdl.views', level='ERROR') as logs:
+                response = download_file(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b'The service is receiving too many requests.', response.content)
+        self.assertIn('HTTP Error 429: rate-limit exceeded', logs.output[0])
+        self.assertIsNotNone(logs.records[0].exc_info)
 
     def test_mp3_download_uses_ffmpeg_postprocessor(self):
         created = {}
